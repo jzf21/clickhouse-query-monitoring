@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { QueryLog } from '@/app/lib/api';
 
 interface QueryLogsTableProps {
@@ -133,12 +133,13 @@ export default function QueryLogsTable({ data }: QueryLogsTableProps) {
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-            {sortedData.map((log) => (
-              <>
+            {sortedData.map((log, index) => {
+              const rowKey = `${log.query_id}-${log.type}-${index}`;
+              return (
+              <Fragment key={rowKey}>
                 <tr
-                  key={log.query_id}
                   className="cursor-pointer hover:bg-zinc-50 dark:hover:bg-zinc-800/50"
-                  onClick={() => setExpandedRow(expandedRow === log.query_id ? null : log.query_id)}
+                  onClick={() => setExpandedRow(expandedRow === rowKey ? null : rowKey)}
                 >
                   <td className="whitespace-nowrap px-4 py-3 text-zinc-600 dark:text-zinc-400">
                     {new Date(log.event_time).toLocaleString()}
@@ -160,8 +161,8 @@ export default function QueryLogsTable({ data }: QueryLogsTableProps) {
                     {log.read_rows.toLocaleString()}
                   </td>
                 </tr>
-                {expandedRow === log.query_id && (
-                  <tr key={`${log.query_id}-expanded`} className="bg-zinc-50 dark:bg-zinc-800/30">
+                {expandedRow === rowKey && (
+                  <tr className="bg-zinc-50 dark:bg-zinc-800/30">
                     <td colSpan={7} className="px-4 py-4">
                       <div className="space-y-4">
                         <div>
@@ -234,8 +235,9 @@ export default function QueryLogsTable({ data }: QueryLogsTableProps) {
                     </td>
                   </tr>
                 )}
-              </>
-            ))}
+              </Fragment>
+            );
+            })}
           </tbody>
         </table>
       </div>
