@@ -32,6 +32,7 @@ func NewQueryLogHandler(repo *repository.QueryLogRepository) *QueryLogHandler {
 //   - end_time: Filter queries before this time (RFC3339 format)
 //   - limit: Maximum number of records to return (default: 100, max: 1000)
 //   - offset: Number of records to skip for pagination
+//   - columns: Comma-separated list of columns to return (if omitted, returns all columns)
 //
 // Response:
 //
@@ -42,6 +43,14 @@ func NewQueryLogHandler(repo *repository.QueryLogRepository) *QueryLogHandler {
 //	    "offset": 0,
 //	    "count": 50
 //	  }
+//	}
+//
+// When columns parameter is provided, response includes:
+//
+//	{
+//	  "data": [...],
+//	  "columns": ["query_id", "query", ...],
+//	  "pagination": {...}
 //	}
 func (h *QueryLogHandler) GetQueryLogs(c *gin.Context) {
 	// Parse query parameters into filter struct
@@ -54,24 +63,56 @@ func (h *QueryLogHandler) GetQueryLogs(c *gin.Context) {
 		return
 	}
 
-	// Call repository to get filtered query logs
-	logs, err := h.repo.GetQueryLogs(c.Request.Context(), filter)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error":   "database_error",
-			"message": "Failed to retrieve query logs",
-		})
-		// Log the actual error for debugging (in production, use proper logging)
-		// log.Printf("Error fetching query logs: %v", err)
-		return
-	}
-
 	// Determine the effective limit for pagination metadata
 	limit := filter.Limit
 	if limit <= 0 {
 		limit = 100
 	} else if limit > 1000 {
 		limit = 1000
+	}
+
+	// If columns parameter is provided, use dynamic column query
+	if filter.Columns != "" {
+		columns, err := repository.ParseColumns(filter.Columns)
+		if err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{
+				"error":   "invalid_columns",
+				"message": err.Error(),
+			})
+			return
+		}
+
+		logs, err := h.repo.GetQueryLogsDynamic(c.Request.Context(), filter, columns)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "database_error",
+				"message": "Failed to retrieve query logs",
+			})
+			return
+		}
+
+		response := models.QueryLogDynamicResponse{
+			Data:    logs,
+			Columns: columns,
+			Pagination: models.Pagination{
+				Limit:  limit,
+				Offset: filter.Offset,
+				Count:  len(logs),
+			},
+		}
+
+		c.JSON(http.StatusOK, response)
+		return
+	}
+
+	// Call repository to get filtered query logs (full columns)
+	logs, err := h.repo.GetQueryLogs(c.Request.Context(), filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "database_error",
+			"message": "Failed to retrieve query logs",
+		})
+		return
 	}
 
 	// Return response with pagination metadata
@@ -85,6 +126,24 @@ func (h *QueryLogHandler) GetQueryLogs(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// GetDatabases handles GET /api/v1/databases
+//
+// Response: List of database names
+func (h *QueryLogHandler) GetDatabases(c *gin.Context) {
+	databases, err := h.repo.GetDatabases(c.Request.Context())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "database_error",
+			"message": "Failed to retrieve databases",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"databases": databases,
+	})
 }
 
 // GetQueryLogByID handles GET /api/v1/logs/:id
@@ -115,4 +174,67 @@ func (h *QueryLogHandler) GetQueryLogByID(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, log)
+}
+
+// GetAggregatedMetrics handles GET /api/v1/logs/metrics
+//
+// Returns time-bucketed aggregated metrics for chart visualization.
+// The bucket size is automatically determined based on the time range:
+//   - <= 5 min: 5 second buckets
+//   - <= 30 min: 30 second buckets
+//   - <= 2 hours: 1 minute buckets
+//   - <= 6 hours: 3 minute buckets
+//   - <= 1 day: 15 minute buckets
+//   - <= 1 week: 1 hour buckets
+//   - <= 30 days: 6 hour buckets
+//   - > 30 days: 1 day buckets
+//
+// Query Parameters: Same as GetQueryLogs (except limit/offset/columns)
+//
+// Response:
+//
+//	{
+//	  "data": [
+//	    {
+//	      "time_bucket": "2024-01-22T10:00:00Z",
+//	      "total_queries": 150,
+//	      "avg_duration_ms": 45.5,
+//	      "max_duration_ms": 1200,
+//	      "avg_memory_usage": 1048576,
+//	      "max_memory_usage": 10485760,
+//	      "total_read_bytes": 50000000,
+//	      "total_written_bytes": 1000000,
+//	      "failed_queries": 2
+//	    },
+//	    ...
+//	  ],
+//	  "bucket_size": "1m",
+//	  "bucket_label": "1 minute"
+//	}
+func (h *QueryLogHandler) GetAggregatedMetrics(c *gin.Context) {
+	var filter models.QueryLogFilter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid_parameters",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	metrics, bucket, err := h.repo.GetAggregatedMetrics(c.Request.Context(), filter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "database_error",
+			"message": "Failed to retrieve aggregated metrics",
+		})
+		return
+	}
+
+	response := models.QueryLogMetricsResponse{
+		Data:        metrics,
+		BucketSize:  bucket.Label,
+		BucketLabel: bucket.Interval,
+	}
+
+	c.JSON(http.StatusOK, response)
 }

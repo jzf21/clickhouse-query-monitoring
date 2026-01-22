@@ -40,8 +40,12 @@ func Setup(db *database.ClickHouseDB) *gin.Engine {
 		logs := v1.Group("/logs")
 		{
 			logs.GET("", queryLogHandler.GetQueryLogs)
+			logs.GET("/metrics", queryLogHandler.GetAggregatedMetrics)
 			logs.GET("/:id", queryLogHandler.GetQueryLogByID)
 		}
+
+		// Database endpoints
+		v1.GET("/databases", queryLogHandler.GetDatabases)
 	}
 
 	return router

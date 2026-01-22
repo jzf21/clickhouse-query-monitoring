@@ -114,6 +114,53 @@ type QueryLogFilter struct {
 
 	// Offset is the number of records to skip for pagination
 	Offset int `form:"offset"`
+
+	// Columns specifies which fields to return in the response (comma-separated).
+	// If empty, returns all fields.
+	// Valid values: query_id, query, event_time, event_date, type, query_duration_ms,
+	// memory_usage, read_rows, read_bytes, written_rows, written_bytes, result_rows,
+	// result_bytes, databases, tables, exception_code, exception, user, client_hostname,
+	// http_user_agent, initial_user, initial_query_id, is_initial_query
+	Columns string `form:"columns"`
+}
+
+// ValidColumns defines all valid column names for the query_log table.
+var ValidColumns = map[string]bool{
+	"query_id":         true,
+	"query":            true,
+	"event_time":       true,
+	"event_date":       true,
+	"type":             true,
+	"query_duration_ms": true,
+	"memory_usage":     true,
+	"read_rows":        true,
+	"read_bytes":       true,
+	"written_rows":     true,
+	"written_bytes":    true,
+	"result_rows":      true,
+	"result_bytes":     true,
+	"databases":        true,
+	"tables":           true,
+	"exception_code":   true,
+	"exception":        true,
+	"user":             true,
+	"client_hostname":  true,
+	"http_user_agent":  true,
+	"initial_user":     true,
+	"initial_query_id": true,
+	"is_initial_query": true,
+}
+
+// AllColumns returns all valid column names in a consistent order.
+func AllColumns() []string {
+	return []string{
+		"query_id", "query", "event_time", "event_date", "type",
+		"query_duration_ms", "memory_usage", "read_rows", "read_bytes",
+		"written_rows", "written_bytes", "result_rows", "result_bytes",
+		"databases", "tables", "exception_code", "exception", "user",
+		"client_hostname", "http_user_agent", "initial_user",
+		"initial_query_id", "is_initial_query",
+	}
 }
 
 // QueryLogResponse wraps the query results with pagination metadata.
@@ -127,4 +174,32 @@ type Pagination struct {
 	Limit  int `json:"limit"`
 	Offset int `json:"offset"`
 	Count  int `json:"count"` // Number of records returned in this response
+}
+
+// QueryLogDynamicResponse wraps query results with variable columns.
+// Used when the client requests specific columns via the columns parameter.
+type QueryLogDynamicResponse struct {
+	Data       []map[string]interface{} `json:"data"`
+	Columns    []string                 `json:"columns"`
+	Pagination Pagination               `json:"pagination"`
+}
+
+// QueryLogMetrics represents time-bucketed aggregated metrics for charts.
+type QueryLogMetrics struct {
+	TimeBucket        time.Time `json:"time_bucket"`
+	TotalQueries      int64     `json:"total_queries"`
+	AvgDurationMs     float64   `json:"avg_duration_ms"`
+	MaxDurationMs     uint64    `json:"max_duration_ms"`
+	AvgMemoryUsage    float64   `json:"avg_memory_usage"`
+	MaxMemoryUsage    int64     `json:"max_memory_usage"`
+	TotalReadBytes    uint64    `json:"total_read_bytes"`
+	TotalWrittenBytes uint64    `json:"total_written_bytes"`
+	FailedQueries     int64     `json:"failed_queries"`
+}
+
+// QueryLogMetricsResponse wraps aggregated metrics with bucket info.
+type QueryLogMetricsResponse struct {
+	Data         []QueryLogMetrics `json:"data"`
+	BucketSize   string            `json:"bucket_size"`
+	BucketLabel  string            `json:"bucket_label"`
 }

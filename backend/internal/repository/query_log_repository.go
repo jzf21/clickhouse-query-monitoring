@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/actio/clickhouse-monitoring/internal/database"
 	"github.com/actio/clickhouse-monitoring/internal/models"
@@ -236,6 +237,220 @@ func (r *QueryLogRepository) buildQueryLogsQuery(filter models.QueryLogFilter) (
 	return queryBuilder.String(), args
 }
 
+// ParseColumns validates and parses the columns parameter.
+// Returns the list of valid column names, or all columns if the input is empty.
+func ParseColumns(columnsParam string) ([]string, error) {
+	if columnsParam == "" {
+		return models.AllColumns(), nil
+	}
+
+	requested := strings.Split(columnsParam, ",")
+	var validated []string
+	for _, col := range requested {
+		col = strings.TrimSpace(col)
+		if col == "" {
+			continue
+		}
+		if !models.ValidColumns[col] {
+			return nil, fmt.Errorf("invalid column: %s", col)
+		}
+		validated = append(validated, col)
+	}
+
+	if len(validated) == 0 {
+		return nil, fmt.Errorf("at least one valid column is required")
+	}
+
+	return validated, nil
+}
+
+// GetQueryLogsDynamic retrieves query logs with dynamic column selection.
+// Only the specified columns are returned in the response.
+func (r *QueryLogRepository) GetQueryLogsDynamic(ctx context.Context, filter models.QueryLogFilter, columns []string) ([]map[string]interface{}, error) {
+	query, args := r.buildDynamicQuery(filter, columns)
+
+	rows, err := r.db.DB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query query_log: %w", err)
+	}
+	defer rows.Close()
+
+	results := make([]map[string]interface{}, 0)
+	for rows.Next() {
+		// Create scan targets for each column
+		values := make([]interface{}, len(columns))
+		for i, col := range columns {
+			values[i] = r.createScanTarget(col)
+		}
+
+		if err := rows.Scan(values...); err != nil {
+			return nil, fmt.Errorf("failed to scan row: %w", err)
+		}
+
+		// Build the result map
+		row := make(map[string]interface{})
+		for i, col := range columns {
+			row[col] = r.extractValue(col, values[i])
+		}
+		results = append(results, row)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating query_log rows: %w", err)
+	}
+
+	return results, nil
+}
+
+// createScanTarget creates an appropriate pointer for scanning a column value.
+func (r *QueryLogRepository) createScanTarget(col string) interface{} {
+	switch col {
+	case "query_id", "query", "type", "exception", "user", "client_hostname",
+		"http_user_agent", "initial_user", "initial_query_id":
+		return new(string)
+	case "event_time", "event_date":
+		return new(time.Time)
+	case "query_duration_ms", "read_rows", "read_bytes", "written_rows",
+		"written_bytes", "result_rows", "result_bytes":
+		return new(uint64)
+	case "memory_usage":
+		return new(int64)
+	case "exception_code":
+		return new(int32)
+	case "is_initial_query":
+		return new(uint8)
+	case "databases", "tables":
+		return new([]string)
+	default:
+		return new(interface{})
+	}
+}
+
+// extractValue extracts the actual value from a scan target pointer.
+func (r *QueryLogRepository) extractValue(col string, ptr interface{}) interface{} {
+	switch col {
+	case "query_id", "query", "type", "exception", "user", "client_hostname",
+		"http_user_agent", "initial_user", "initial_query_id":
+		return *ptr.(*string)
+	case "event_time", "event_date":
+		return *ptr.(*time.Time)
+	case "query_duration_ms", "read_rows", "read_bytes", "written_rows",
+		"written_bytes", "result_rows", "result_bytes":
+		return *ptr.(*uint64)
+	case "memory_usage":
+		return *ptr.(*int64)
+	case "exception_code":
+		return *ptr.(*int32)
+	case "is_initial_query":
+		return *ptr.(*uint8)
+	case "databases", "tables":
+		return *ptr.(*[]string)
+	default:
+		return ptr
+	}
+}
+
+// buildDynamicQuery constructs a SQL query with dynamic column selection.
+func (r *QueryLogRepository) buildDynamicQuery(filter models.QueryLogFilter, columns []string) (string, []interface{}) {
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString("SELECT ")
+	queryBuilder.WriteString(strings.Join(columns, ", "))
+	queryBuilder.WriteString(" FROM system.query_log")
+
+	// Collect WHERE conditions and their corresponding arguments
+	var conditions []string
+	var args []interface{}
+
+	if filter.DBName != "" {
+		conditions = append(conditions, "has(databases, ?)")
+		args = append(args, filter.DBName)
+	}
+
+	if filter.QueryID != "" {
+		conditions = append(conditions, "query_id = ?")
+		args = append(args, filter.QueryID)
+	}
+
+	if filter.OnlyFailed {
+		conditions = append(conditions, "(exception_code != 0 OR type = 'ExceptionBeforeStart')")
+	}
+
+	if filter.MinDurationMs > 0 {
+		conditions = append(conditions, "query_duration_ms > ?")
+		args = append(args, filter.MinDurationMs)
+	}
+
+	if filter.User != "" {
+		conditions = append(conditions, "user = ?")
+		args = append(args, filter.User)
+	}
+
+	if filter.QueryContains != "" {
+		conditions = append(conditions, "positionCaseInsensitive(query, ?) > 0")
+		args = append(args, filter.QueryContains)
+	}
+
+	if filter.StartTime != nil {
+		conditions = append(conditions, "event_time >= ?")
+		args = append(args, *filter.StartTime)
+	}
+
+	if filter.EndTime != nil {
+		conditions = append(conditions, "event_time <= ?")
+		args = append(args, *filter.EndTime)
+	}
+
+	if len(conditions) > 0 {
+		queryBuilder.WriteString(" WHERE ")
+		queryBuilder.WriteString(strings.Join(conditions, " AND "))
+	}
+
+	queryBuilder.WriteString(" ORDER BY event_time DESC")
+
+	limit := filter.Limit
+	if limit <= 0 {
+		limit = defaultLimit
+	} else if limit > maxLimit {
+		limit = maxLimit
+	}
+
+	queryBuilder.WriteString(" LIMIT ?")
+	args = append(args, limit)
+
+	if filter.Offset > 0 {
+		queryBuilder.WriteString(" OFFSET ?")
+		args = append(args, filter.Offset)
+	}
+
+	return queryBuilder.String(), args
+}
+
+// GetDatabases retrieves all database names from ClickHouse.
+func (r *QueryLogRepository) GetDatabases(ctx context.Context) ([]string, error) {
+	query := `SELECT name FROM system.databases ORDER BY name`
+
+	rows, err := r.db.DB().QueryContext(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query databases: %w", err)
+	}
+	defer rows.Close()
+
+	var databases []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("failed to scan database name: %w", err)
+		}
+		databases = append(databases, name)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("error iterating database rows: %w", err)
+	}
+
+	return databases, nil
+}
+
 // GetQueryLogByID retrieves a single query log entry by its query_id.
 // Note: query_id may not be unique across time, so this returns the most recent match.
 func (r *QueryLogRepository) GetQueryLogByID(ctx context.Context, queryID string) (*models.QueryLog, error) {
@@ -306,4 +521,158 @@ func (r *QueryLogRepository) GetQueryLogByID(ctx context.Context, queryID string
 	log.Tables = tables
 
 	return &log, nil
+}
+
+// BucketSize represents a time bucket configuration for aggregation.
+type BucketSize struct {
+	Interval string // ClickHouse interval string (e.g., "1 SECOND", "1 MINUTE")
+	Label    string // Human-readable label (e.g., "1s", "1m")
+}
+
+// determineBucketSize selects the optimal bucket size based on the time range.
+// This ensures charts have a reasonable number of data points (roughly 60-120).
+func determineBucketSize(startTime, endTime *time.Time) BucketSize {
+	if startTime == nil || endTime == nil {
+		// Default to 1 minute if no time range specified
+		return BucketSize{Interval: "1 MINUTE", Label: "1m"}
+	}
+
+	duration := endTime.Sub(*startTime)
+
+	switch {
+	case duration <= 5*time.Minute:
+		// Up to 5 min: bucket by 5 seconds (~60 points max)
+		return BucketSize{Interval: "5 SECOND", Label: "5s"}
+	case duration <= 30*time.Minute:
+		// Up to 30 min: bucket by 30 seconds (~60 points max)
+		return BucketSize{Interval: "30 SECOND", Label: "30s"}
+	case duration <= 2*time.Hour:
+		// Up to 2 hours: bucket by 1 minute (~120 points max)
+		return BucketSize{Interval: "1 MINUTE", Label: "1m"}
+	case duration <= 6*time.Hour:
+		// Up to 6 hours: bucket by 3 minutes (~120 points max)
+		return BucketSize{Interval: "3 MINUTE", Label: "3m"}
+	case duration <= 24*time.Hour:
+		// Up to 1 day: bucket by 15 minutes (~96 points max)
+		return BucketSize{Interval: "15 MINUTE", Label: "15m"}
+	case duration <= 7*24*time.Hour:
+		// Up to 1 week: bucket by 1 hour (~168 points max)
+		return BucketSize{Interval: "1 HOUR", Label: "1h"}
+	case duration <= 30*24*time.Hour:
+		// Up to 30 days: bucket by 6 hours (~120 points max)
+		return BucketSize{Interval: "6 HOUR", Label: "6h"}
+	default:
+		// More than 30 days: bucket by 1 day
+		return BucketSize{Interval: "1 DAY", Label: "1d"}
+	}
+}
+
+// GetAggregatedMetrics retrieves time-bucketed aggregated metrics for charts.
+// It automatically determines the bucket size based on the time range.
+func (r *QueryLogRepository) GetAggregatedMetrics(ctx context.Context, filter models.QueryLogFilter) ([]models.QueryLogMetrics, BucketSize, error) {
+	bucket := determineBucketSize(filter.StartTime, filter.EndTime)
+
+	// Build aggregation query
+	query, args := r.buildAggregationQuery(filter, bucket.Interval)
+
+	rows, err := r.db.DB().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, bucket, fmt.Errorf("failed to query aggregated metrics: %w", err)
+	}
+	defer rows.Close()
+
+	var metrics []models.QueryLogMetrics
+	for rows.Next() {
+		var m models.QueryLogMetrics
+		err := rows.Scan(
+			&m.TimeBucket,
+			&m.TotalQueries,
+			&m.AvgDurationMs,
+			&m.MaxDurationMs,
+			&m.AvgMemoryUsage,
+			&m.MaxMemoryUsage,
+			&m.TotalReadBytes,
+			&m.TotalWrittenBytes,
+			&m.FailedQueries,
+		)
+		if err != nil {
+			return nil, bucket, fmt.Errorf("failed to scan aggregated metrics row: %w", err)
+		}
+		metrics = append(metrics, m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, bucket, fmt.Errorf("error iterating aggregated metrics rows: %w", err)
+	}
+
+	return metrics, bucket, nil
+}
+
+// buildAggregationQuery constructs the SQL query for time-bucketed aggregation.
+func (r *QueryLogRepository) buildAggregationQuery(filter models.QueryLogFilter, bucketInterval string) (string, []interface{}) {
+	// Build the aggregation query with the specified bucket interval
+	// Note: bucketInterval is a controlled value from determineBucketSize, not user input
+	baseQuery := fmt.Sprintf(`
+		SELECT
+			toStartOfInterval(event_time, INTERVAL %s) as time_bucket,
+			COUNT(*) as total_queries,
+			AVG(query_duration_ms) as avg_duration_ms,
+			MAX(query_duration_ms) as max_duration_ms,
+			AVG(memory_usage) as avg_memory_usage,
+			MAX(memory_usage) as max_memory_usage,
+			SUM(read_bytes) as total_read_bytes,
+			SUM(written_bytes) as total_written_bytes,
+			SUM(CASE WHEN exception_code != 0 OR type = 'ExceptionBeforeStart' THEN 1 ELSE 0 END) as failed_queries
+		FROM system.query_log
+	`, bucketInterval)
+
+	var conditions []string
+	var args []interface{}
+
+	// Apply the same filters as regular queries
+	if filter.DBName != "" {
+		conditions = append(conditions, "has(databases, ?)")
+		args = append(args, filter.DBName)
+	}
+
+	if filter.OnlyFailed {
+		conditions = append(conditions, "(exception_code != 0 OR type = 'ExceptionBeforeStart')")
+	}
+
+	if filter.MinDurationMs > 0 {
+		conditions = append(conditions, "query_duration_ms > ?")
+		args = append(args, filter.MinDurationMs)
+	}
+
+	if filter.User != "" {
+		conditions = append(conditions, "user = ?")
+		args = append(args, filter.User)
+	}
+
+	if filter.QueryContains != "" {
+		conditions = append(conditions, "positionCaseInsensitive(query, ?) > 0")
+		args = append(args, filter.QueryContains)
+	}
+
+	if filter.StartTime != nil {
+		conditions = append(conditions, "event_time >= ?")
+		args = append(args, *filter.StartTime)
+	}
+
+	if filter.EndTime != nil {
+		conditions = append(conditions, "event_time <= ?")
+		args = append(args, *filter.EndTime)
+	}
+
+	var queryBuilder strings.Builder
+	queryBuilder.WriteString(baseQuery)
+
+	if len(conditions) > 0 {
+		queryBuilder.WriteString(" WHERE ")
+		queryBuilder.WriteString(strings.Join(conditions, " AND "))
+	}
+
+	queryBuilder.WriteString(" GROUP BY time_bucket ORDER BY time_bucket ASC")
+
+	return queryBuilder.String(), args
 }
