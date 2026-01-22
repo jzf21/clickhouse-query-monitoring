@@ -39,6 +39,7 @@ export interface QueryLogFilters {
   db_name?: string;
   query_id?: string;
   only_failed?: boolean;
+  only_success?: boolean;
   min_duration_ms?: number;
   user?: string;
   query_contains?: string;
@@ -89,6 +90,7 @@ export async function fetchQueryLogs(filters: QueryLogFilters = {}): Promise<Que
   if (filters.db_name) params.append('db_name', filters.db_name);
   if (filters.query_id) params.append('query_id', filters.query_id);
   if (filters.only_failed) params.append('only_failed', 'true');
+  if (filters.only_success) params.append('only_success', 'true');
   if (filters.min_duration_ms) params.append('min_duration_ms', filters.min_duration_ms.toString());
   if (filters.user) params.append('user', filters.user);
   if (filters.query_contains) params.append('query_contains', filters.query_contains);
@@ -162,6 +164,7 @@ export interface QueryLogMetricsResponse {
 export interface MetricsFilters {
   db_name?: string;
   only_failed?: boolean;
+  only_success?: boolean;
   min_duration_ms?: number;
   user?: string;
   query_contains?: string;
@@ -174,6 +177,7 @@ export async function fetchQueryLogMetrics(filters: MetricsFilters = {}): Promis
 
   if (filters.db_name) params.append('db_name', filters.db_name);
   if (filters.only_failed) params.append('only_failed', 'true');
+  if (filters.only_success) params.append('only_success', 'true');
   if (filters.min_duration_ms) params.append('min_duration_ms', filters.min_duration_ms.toString());
   if (filters.user) params.append('user', filters.user);
   if (filters.query_contains) params.append('query_contains', filters.query_contains);
@@ -189,4 +193,26 @@ export async function fetchQueryLogMetrics(filters: MetricsFilters = {}): Promis
   }
 
   return response.json();
+}
+
+export interface ExportFilters extends MetricsFilters {
+  columns: string; // Required comma-separated list of columns
+  limit?: number;
+}
+
+export function getExportUrl(filters: ExportFilters): string {
+  const params = new URLSearchParams();
+
+  params.append('columns', filters.columns);
+  if (filters.limit) params.append('limit', filters.limit.toString());
+  if (filters.db_name) params.append('db_name', filters.db_name);
+  if (filters.only_failed) params.append('only_failed', 'true');
+  if (filters.only_success) params.append('only_success', 'true');
+  if (filters.min_duration_ms) params.append('min_duration_ms', filters.min_duration_ms.toString());
+  if (filters.user) params.append('user', filters.user);
+  if (filters.query_contains) params.append('query_contains', filters.query_contains);
+  if (filters.start_time) params.append('start_time', filters.start_time);
+  if (filters.end_time) params.append('end_time', filters.end_time);
+
+  return `${API_BASE_URL}/api/v1/logs/export?${params.toString()}`;
 }

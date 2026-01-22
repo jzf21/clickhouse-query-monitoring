@@ -20,6 +20,7 @@ import QueryTypeChart from './charts/QueryTypeChart';
 import DataVolumeChart from './charts/DataVolumeChart';
 import QueryLogsTable from './QueryLogsTable';
 import ColumnPicker from './ColumnPicker';
+import ExportModal from './ExportModal';
 
 type Tab = 'overview' | 'logs';
 
@@ -49,6 +50,7 @@ export default function Dashboard() {
   const [endDate, setEndDate] = useState<string>('');
   // Database list for dropdown
   const [databases, setDatabases] = useState<string[]>([]);
+  const [showExportModal, setShowExportModal] = useState(false);
   const [selectedColumns, setSelectedColumns] = useState<QueryLogColumnKey[]>(() => {
     // Load from localStorage or use defaults
     if (typeof window !== 'undefined') {
@@ -117,12 +119,14 @@ export default function Dashboard() {
       if (debouncedUser) filters.user = debouncedUser;
       if (selectedDatabase) filters.db_name = selectedDatabase;
       if (selectedStatus === 'failed') filters.only_failed = true;
+      if (selectedStatus === 'success') filters.only_success = true;
 
       // Build filters for metrics (same base filters)
       const metricsFilters: MetricsFilters = { ...timeFilters };
       if (debouncedUser) metricsFilters.user = debouncedUser;
       if (selectedDatabase) metricsFilters.db_name = selectedDatabase;
       if (selectedStatus === 'failed') metricsFilters.only_failed = true;
+      if (selectedStatus === 'success') metricsFilters.only_success = true;
 
       // Fetch both query logs and aggregated metrics in parallel
       const [logsResponse, metricsResponse] = await Promise.all([
@@ -195,6 +199,25 @@ export default function Dashboard() {
                   Updated: {lastUpdated.toLocaleTimeString()}
                 </span>
               )}
+              <button
+                onClick={() => setShowExportModal(true)}
+                className="flex items-center gap-2 rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-300 dark:hover:bg-zinc-700"
+              >
+                <svg
+                  className="h-4 w-4"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
+                  />
+                </svg>
+                Export
+              </button>
               <button
                 onClick={loadData}
                 disabled={loading}
@@ -419,6 +442,19 @@ export default function Dashboard() {
           <QueryLogsTable data={data} selectedColumns={selectedColumns} />
         )}
       </div>
+
+      <ExportModal
+        isOpen={showExportModal}
+        onClose={() => setShowExportModal(false)}
+        selectedColumns={selectedColumns}
+        currentFilters={{
+          user: debouncedUser || undefined,
+          db_name: selectedDatabase || undefined,
+          only_failed: selectedStatus === 'failed' || undefined,
+          only_success: selectedStatus === 'success' || undefined,
+          ...buildTimeFilters(),
+        }}
+      />
     </div>
   );
 }

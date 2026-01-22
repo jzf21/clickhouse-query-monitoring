@@ -1,7 +1,12 @@
 package handlers
 
 import (
+	"encoding/csv"
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -237,4 +242,114 @@ func (h *QueryLogHandler) GetAggregatedMetrics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, response)
+}
+
+// ExportCSV handles GET /api/v1/logs/export
+//
+// Exports query logs as CSV file with user-specified columns and limit.
+//
+// Query Parameters:
+//   - columns: Comma-separated list of columns to export (required)
+//   - limit: Maximum number of records to export (default: 1000, max: 100000)
+//   - All other filter parameters from GetQueryLogs
+//
+// Response: CSV file download
+func (h *QueryLogHandler) ExportCSV(c *gin.Context) {
+	var filter models.QueryLogFilter
+	if err := c.ShouldBindQuery(&filter); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid_parameters",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Parse columns - required for CSV export
+	if filter.Columns == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "missing_columns",
+			"message": "columns parameter is required for CSV export",
+		})
+		return
+	}
+
+	columns, err := repository.ParseColumns(filter.Columns)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error":   "invalid_columns",
+			"message": err.Error(),
+		})
+		return
+	}
+
+	// Set higher limit for CSV export (max 100000)
+	if filter.Limit <= 0 {
+		filter.Limit = 1000
+	} else if filter.Limit > 100000 {
+		filter.Limit = 100000
+	}
+
+	// Fetch the data
+	logs, err := h.repo.GetQueryLogsDynamic(c.Request.Context(), filter, columns)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "database_error",
+			"message": "Failed to retrieve query logs for export",
+		})
+		return
+	}
+
+	// Generate filename with timestamp
+	filename := fmt.Sprintf("query_logs_%s.csv", time.Now().Format("20060102_150405"))
+
+	// Set headers for CSV download
+	c.Header("Content-Type", "text/csv")
+	c.Header("Content-Disposition", fmt.Sprintf("attachment; filename=%s", filename))
+
+	// Create CSV writer
+	writer := csv.NewWriter(c.Writer)
+	defer writer.Flush()
+
+	// Write header row
+	if err := writer.Write(columns); err != nil {
+		return
+	}
+
+	// Write data rows
+	for _, row := range logs {
+		record := make([]string, len(columns))
+		for i, col := range columns {
+			record[i] = formatCSVValue(row[col])
+		}
+		if err := writer.Write(record); err != nil {
+			return
+		}
+	}
+}
+
+// formatCSVValue converts a value to a CSV-friendly string representation.
+func formatCSVValue(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+
+	switch val := v.(type) {
+	case string:
+		return val
+	case time.Time:
+		return val.Format(time.RFC3339)
+	case []string:
+		return strings.Join(val, ";")
+	case *[]string:
+		if val != nil {
+			return strings.Join(*val, ";")
+		}
+		return ""
+	case int, int32, int64, uint, uint32, uint64, uint8:
+		return fmt.Sprintf("%d", val)
+	case float32, float64:
+		return strconv.FormatFloat(val.(float64), 'f', -1, 64)
+	default:
+		return fmt.Sprintf("%v", val)
+	}
 }

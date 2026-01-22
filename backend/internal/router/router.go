@@ -41,6 +41,7 @@ func Setup(db *database.ClickHouseDB) *gin.Engine {
 		{
 			logs.GET("", queryLogHandler.GetQueryLogs)
 			logs.GET("/metrics", queryLogHandler.GetAggregatedMetrics)
+			logs.GET("/export", queryLogHandler.ExportCSV)
 			logs.GET("/:id", queryLogHandler.GetQueryLogByID)
 		}
 

@@ -94,6 +94,10 @@ type QueryLogFilter struct {
 	// (exception_code != 0 OR type = 'ExceptionBeforeStart')
 	OnlyFailed bool `form:"only_failed"`
 
+	// OnlySuccess when true, returns only successfully completed queries
+	// (type = 'QueryFinish' AND exception_code = 0)
+	OnlySuccess bool `form:"only_success"`
+
 	// MinDurationMs filters queries with duration greater than this value
 	MinDurationMs uint64 `form:"min_duration_ms"`
 

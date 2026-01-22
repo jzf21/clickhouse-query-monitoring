@@ -162,6 +162,10 @@ func (r *QueryLogRepository) buildQueryLogsQuery(filter models.QueryLogFilter) (
 		args = append(args, filter.QueryID)
 	}
 
+	// Always exclude QueryStart entries - we only want completed queries
+	// QueryStart entries have no useful metrics (duration=0, memory=0, etc.)
+	conditions = append(conditions, "type != 'QueryStart'")
+
 	// Filter for failed queries only
 	// A query is considered failed if:
 	// - exception_code is non-zero (error during execution), OR
@@ -169,6 +173,14 @@ func (r *QueryLogRepository) buildQueryLogsQuery(filter models.QueryLogFilter) (
 	if filter.OnlyFailed {
 		conditions = append(conditions, "(exception_code != 0 OR type = 'ExceptionBeforeStart')")
 		// No args needed - this is a static condition
+	}
+
+	// Filter for successful queries only
+	// A query is considered successful if:
+	// - type is 'QueryFinish' (completed normally), AND
+	// - exception_code is 0 (no error)
+	if filter.OnlySuccess {
+		conditions = append(conditions, "(type = 'QueryFinish' AND exception_code = 0)")
 	}
 
 	// Filter by minimum duration (queries slower than this threshold)
@@ -371,8 +383,15 @@ func (r *QueryLogRepository) buildDynamicQuery(filter models.QueryLogFilter, col
 		args = append(args, filter.QueryID)
 	}
 
+	// Always exclude QueryStart entries - we only want completed queries
+	conditions = append(conditions, "type != 'QueryStart'")
+
 	if filter.OnlyFailed {
 		conditions = append(conditions, "(exception_code != 0 OR type = 'ExceptionBeforeStart')")
+	}
+
+	if filter.OnlySuccess {
+		conditions = append(conditions, "(type = 'QueryFinish' AND exception_code = 0)")
 	}
 
 	if filter.MinDurationMs > 0 {
@@ -629,6 +648,9 @@ func (r *QueryLogRepository) buildAggregationQuery(filter models.QueryLogFilter,
 	var conditions []string
 	var args []interface{}
 
+	// Always exclude QueryStart entries - we only want completed queries
+	conditions = append(conditions, "type != 'QueryStart'")
+
 	// Apply the same filters as regular queries
 	if filter.DBName != "" {
 		conditions = append(conditions, "has(databases, ?)")
@@ -637,6 +659,10 @@ func (r *QueryLogRepository) buildAggregationQuery(filter models.QueryLogFilter,
 
 	if filter.OnlyFailed {
 		conditions = append(conditions, "(exception_code != 0 OR type = 'ExceptionBeforeStart')")
+	}
+
+	if filter.OnlySuccess {
+		conditions = append(conditions, "(type = 'QueryFinish' AND exception_code = 0)")
 	}
 
 	if filter.MinDurationMs > 0 {
