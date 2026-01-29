@@ -12,8 +12,8 @@ import (
 
 const (
 	// Default and maximum limits for pagination
-	defaultLimit = 100
-	maxLimit     = 1000
+	defaultLimit = 1000
+	maxLimit     = 10000
 )
 
 // QueryLogRepository handles database operations for query_log data.
@@ -203,6 +203,12 @@ func (r *QueryLogRepository) buildQueryLogsQuery(filter models.QueryLogFilter) (
 		args = append(args, filter.QueryContains)
 	}
 
+	// Filter by query kind (Select, Insert, Create, Alter, Drop, etc.)
+	if filter.QueryKind != "" {
+		conditions = append(conditions, "query_kind = ?")
+		args = append(args, filter.QueryKind)
+	}
+
 	// Filter by time range - start time
 	if filter.StartTime != nil {
 		conditions = append(conditions, "event_time >= ?")
@@ -225,8 +231,16 @@ func (r *QueryLogRepository) buildQueryLogsQuery(filter models.QueryLogFilter) (
 		queryBuilder.WriteString(strings.Join(conditions, " AND "))
 	}
 
-	// Add ORDER BY for consistent, predictable results (most recent first)
-	queryBuilder.WriteString(" ORDER BY event_time DESC")
+	// Add ORDER BY - use provided sort or default to event_time DESC
+	sortColumn := "event_time"
+	sortOrder := "DESC"
+	if filter.SortBy != "" && models.ValidSortColumns[filter.SortBy] {
+		sortColumn = filter.SortBy
+	}
+	if filter.SortOrder == "asc" {
+		sortOrder = "ASC"
+	}
+	queryBuilder.WriteString(fmt.Sprintf(" ORDER BY %s %s", sortColumn, sortOrder))
 
 	// Apply pagination with LIMIT and OFFSET
 	// Enforce limits to prevent excessive data retrieval

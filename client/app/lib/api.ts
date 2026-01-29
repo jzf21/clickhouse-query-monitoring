@@ -43,11 +43,14 @@ export interface QueryLogFilters {
   min_duration_ms?: number;
   user?: string;
   query_contains?: string;
+  query_kind?: string; // Select, Insert, Create, Alter, Drop, etc.
   start_time?: string;
   end_time?: string;
   limit?: number;
   offset?: number;
   columns?: string; // Comma-separated list of columns to return
+  sort_by?: string; // event_time, memory_usage, query_duration_ms, read_bytes, etc.
+  sort_order?: 'asc' | 'desc';
 }
 
 // Column configuration for the query logs table
@@ -94,11 +97,14 @@ export async function fetchQueryLogs(filters: QueryLogFilters = {}): Promise<Que
   if (filters.min_duration_ms) params.append('min_duration_ms', filters.min_duration_ms.toString());
   if (filters.user) params.append('user', filters.user);
   if (filters.query_contains) params.append('query_contains', filters.query_contains);
+  if (filters.query_kind) params.append('query_kind', filters.query_kind);
   if (filters.start_time) params.append('start_time', filters.start_time);
   if (filters.end_time) params.append('end_time', filters.end_time);
   if (filters.limit) params.append('limit', filters.limit.toString());
   if (filters.offset) params.append('offset', filters.offset.toString());
   if (filters.columns) params.append('columns', filters.columns);
+  if (filters.sort_by) params.append('sort_by', filters.sort_by);
+  if (filters.sort_order) params.append('sort_order', filters.sort_order);
 
   const url = `${API_BASE_URL}/api/v1/logs${params.toString() ? '?' + params.toString() : ''}`;
 

@@ -21,8 +21,9 @@ import DataVolumeChart from './charts/DataVolumeChart';
 import QueryLogsTable from './QueryLogsTable';
 import ColumnPicker from './ColumnPicker';
 import ExportModal from './ExportModal';
+import MCPChat from './MCPChat';
 
-type Tab = 'overview' | 'logs';
+type Tab = 'overview' | 'logs' | 'ai';
 
 export default function Dashboard() {
   const [data, setData] = useState<QueryLog[]>([]);
@@ -50,6 +51,10 @@ export default function Dashboard() {
   const [endDate, setEndDate] = useState<string>('');
   // Database list for dropdown
   const [databases, setDatabases] = useState<string[]>([]);
+  // Sort and query kind filters
+  const [sortBy, setSortBy] = useState<string>('event_time');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  const [queryKind, setQueryKind] = useState<string>('');
   const [showExportModal, setShowExportModal] = useState(false);
   const [selectedColumns, setSelectedColumns] = useState<QueryLogColumnKey[]>(() => {
     // Load from localStorage or use defaults
@@ -115,11 +120,14 @@ export default function Dashboard() {
       const timeFilters = buildTimeFilters();
 
       // Build filters for query logs
-      const filters: QueryLogFilters = { limit: 100, ...timeFilters };
+      const filters: QueryLogFilters = { limit: 1000, ...timeFilters };
       if (debouncedUser) filters.user = debouncedUser;
       if (selectedDatabase) filters.db_name = selectedDatabase;
       if (selectedStatus === 'failed') filters.only_failed = true;
       if (selectedStatus === 'success') filters.only_success = true;
+      if (queryKind) filters.query_kind = queryKind;
+      if (sortBy) filters.sort_by = sortBy;
+      if (sortOrder) filters.sort_order = sortOrder;
 
       // Build filters for metrics (same base filters)
       const metricsFilters: MetricsFilters = { ...timeFilters };
@@ -143,7 +151,7 @@ export default function Dashboard() {
     } finally {
       setLoading(false);
     }
-  }, [debouncedUser, selectedDatabase, selectedStatus, buildTimeFilters]);
+  }, [debouncedUser, selectedDatabase, selectedStatus, queryKind, sortBy, sortOrder, buildTimeFilters]);
 
   useEffect(() => {
     loadData();
@@ -267,6 +275,16 @@ export default function Dashboard() {
             >
               Query Logs
             </button>
+            <button
+              onClick={() => setActiveTab('ai')}
+              className={`px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === 'ai'
+                  ? 'border-b-2 border-blue-500 text-blue-600 dark:text-blue-400'
+                  : 'text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100'
+              }`}
+            >
+              AI Analysis
+            </button>
           </div>
 
           {/* Filters */}
@@ -317,6 +335,46 @@ export default function Dashboard() {
                 <option value="">All</option>
                 <option value="failed">Failed</option>
                 <option value="success">Success</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor="query-kind-filter" className="text-sm text-zinc-600 dark:text-zinc-400">
+                Type:
+              </label>
+              <select
+                id="query-kind-filter"
+                value={queryKind}
+                onChange={(e) => setQueryKind(e.target.value)}
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              >
+                <option value="">All</option>
+                <option value="Select">Select</option>
+                <option value="Insert">Insert</option>
+                <option value="Create">Create</option>
+                <option value="Alter">Alter</option>
+                <option value="Drop">Drop</option>
+              </select>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <label htmlFor="sort-filter" className="text-sm text-zinc-600 dark:text-zinc-400">
+                Sort:
+              </label>
+              <select
+                id="sort-filter"
+                value={`${sortBy}-${sortOrder}`}
+                onChange={(e) => {
+                  const [field, order] = e.target.value.split('-') as [string, 'asc' | 'desc'];
+                  setSortBy(field);
+                  setSortOrder(order);
+                }}
+                className="rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+              >
+                <option value="event_time-desc">Recent</option>
+                <option value="memory_usage-desc">Top Memory</option>
+                <option value="query_duration_ms-desc">Slowest</option>
+                <option value="read_bytes-desc">Most Read</option>
               </select>
             </div>
 
@@ -438,8 +496,15 @@ export default function Dashboard() {
 
             <DataVolumeChart data={metricsData} bucketSize={bucketSize} />
           </div>
-        ) : (
+        ) : activeTab === 'logs' ? (
           <QueryLogsTable data={data} selectedColumns={selectedColumns} />
+        ) : (
+          <MCPChat
+            context={{
+              ...buildTimeFilters(),
+              db_name: selectedDatabase || undefined,
+            }}
+          />
         )}
       </div>
 

@@ -107,6 +107,10 @@ type QueryLogFilter struct {
 	// QueryContains filters queries containing this substring (case-insensitive)
 	QueryContains string `form:"query_contains"`
 
+	// QueryKind filters by query type: "Select", "Insert", "Create", "Alter", "Drop", etc.
+	// Maps to ClickHouse's query_kind column
+	QueryKind string `form:"query_kind"`
+
 	// StartTime filters queries after this time
 	StartTime *time.Time `form:"start_time" time_format:"2006-01-02T15:04:05Z07:00"`
 
@@ -126,6 +130,24 @@ type QueryLogFilter struct {
 	// result_bytes, databases, tables, exception_code, exception, user, client_hostname,
 	// http_user_agent, initial_user, initial_query_id, is_initial_query
 	Columns string `form:"columns"`
+
+	// SortBy specifies the column to sort results by (default: event_time)
+	// Valid values: event_time, memory_usage, query_duration_ms, read_bytes, read_rows
+	SortBy string `form:"sort_by"`
+
+	// SortOrder specifies the sort direction: "asc" or "desc" (default: desc)
+	SortOrder string `form:"sort_order"`
+}
+
+// ValidSortColumns defines columns that can be used for sorting
+var ValidSortColumns = map[string]bool{
+	"event_time":        true,
+	"memory_usage":      true,
+	"query_duration_ms": true,
+	"read_bytes":        true,
+	"read_rows":         true,
+	"written_bytes":     true,
+	"written_rows":      true,
 }
 
 // ValidColumns defines all valid column names for the query_log table.

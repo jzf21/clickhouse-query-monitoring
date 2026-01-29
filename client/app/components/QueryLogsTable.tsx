@@ -1,6 +1,6 @@
 'use client';
 
-import { Fragment, useState } from 'react';
+import { Fragment, useState, useEffect } from 'react';
 import { QueryLog, QueryLogColumnKey, QUERY_LOG_COLUMNS } from '@/app/lib/api';
 
 interface QueryLogsTableProps {
@@ -204,11 +204,19 @@ function getStatusBadgeElement(log: QueryLog): React.ReactNode {
   );
 }
 
+const ITEMS_PER_PAGE = 50;
+
 export default function QueryLogsTable({ data, selectedColumns }: QueryLogsTableProps) {
   const [expandedRow, setExpandedRow] = useState<string | null>(null);
   const [sortField, setSortField] = useState<keyof QueryLog>('event_time');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('desc');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset to page 1 when data changes (e.g., on refresh)
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [data]);
 
   // Get columns to display - use selectedColumns if provided, otherwise show default columns
   const columnsToDisplay: QueryLogColumnKey[] = selectedColumns?.length
@@ -248,6 +256,18 @@ export default function QueryLogsTable({ data, selectedColumns }: QueryLogsTable
     return sortDirection === 'asc' ? comparison : -comparison;
   });
 
+  // Pagination calculations
+  const totalPages = Math.ceil(sortedData.length / ITEMS_PER_PAGE);
+  const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
+  const endIndex = startIndex + ITEMS_PER_PAGE;
+  const paginatedData = sortedData.slice(startIndex, endIndex);
+
+  // Reset to page 1 when filters change
+  const handleStatusFilterChange = (value: StatusFilter) => {
+    setStatusFilter(value);
+    setCurrentPage(1);
+  };
+
   const SortIcon = ({ field }: { field: keyof QueryLog }) => {
     if (sortField !== field) {
       return <span className="ml-1 text-zinc-400">↕</span>;
@@ -262,13 +282,31 @@ export default function QueryLogsTable({ data, selectedColumns }: QueryLogsTable
           Status:
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+            onChange={(e) => handleStatusFilterChange(e.target.value as StatusFilter)}
             className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           >
             <option value="all">All</option>
             <option value="success">Success</option>
             <option value="failed">Failed</option>
             <option value="running">Running</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-2 text-sm text-zinc-600 dark:text-zinc-400">
+          Sort:
+          <select
+            value={`${sortField}-${sortDirection}`}
+            onChange={(e) => {
+              const [field, direction] = e.target.value.split('-') as [keyof QueryLog, 'asc' | 'desc'];
+              setSortField(field);
+              setSortDirection(direction);
+              setCurrentPage(1);
+            }}
+            className="rounded-md border border-zinc-300 bg-white px-3 py-1.5 text-sm text-zinc-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
+          >
+            <option value="event_time-desc">Recent</option>
+            <option value="memory_usage-desc">Top Memory</option>
+            <option value="query_duration_ms-desc">Slowest</option>
+            <option value="read_bytes-desc">Most Read</option>
           </select>
         </label>
         <span className="text-sm text-zinc-500">
@@ -299,8 +337,8 @@ export default function QueryLogsTable({ data, selectedColumns }: QueryLogsTable
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-200 dark:divide-zinc-800">
-            {sortedData.map((log, index) => {
-              const rowKey = `${log.query_id}-${log.type}-${index}`;
+            {paginatedData.map((log, index) => {
+              const rowKey = `${log.query_id}-${log.type}-${startIndex + index}`;
               return (
                 <Fragment key={rowKey}>
                   <tr
@@ -402,6 +440,73 @@ export default function QueryLogsTable({ data, selectedColumns }: QueryLogsTable
       {data.length === 0 && (
         <div className="py-12 text-center text-zinc-500">
           No query logs found matching the current filters.
+        </div>
+      )}
+
+      {/* Pagination Controls */}
+      {totalPages > 1 && (
+        <div className="flex items-center justify-between border-t border-zinc-200 px-4 py-3 dark:border-zinc-800">
+          <div className="text-sm text-zinc-600 dark:text-zinc-400">
+            Showing {startIndex + 1} to {Math.min(endIndex, sortedData.length)} of {sortedData.length} results
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setCurrentPage(1)}
+              disabled={currentPage === 1}
+              className="rounded-md border border-zinc-300 px-2 py-1 text-sm disabled:opacity-50 dark:border-zinc-700"
+            >
+              First
+            </button>
+            <button
+              onClick={() => setCurrentPage(currentPage - 1)}
+              disabled={currentPage === 1}
+              className="rounded-md border border-zinc-300 px-3 py-1 text-sm disabled:opacity-50 dark:border-zinc-700"
+            >
+              Prev
+            </button>
+            <div className="flex items-center gap-1">
+              {Array.from({ length: totalPages }, (_, i) => i + 1)
+                .filter((page) => {
+                  // Show first, last, current, and pages around current
+                  return (
+                    page === 1 ||
+                    page === totalPages ||
+                    Math.abs(page - currentPage) <= 1
+                  );
+                })
+                .map((page, idx, arr) => (
+                  <Fragment key={page}>
+                    {idx > 0 && arr[idx - 1] !== page - 1 && (
+                      <span className="px-1 text-zinc-400">...</span>
+                    )}
+                    <button
+                      onClick={() => setCurrentPage(page)}
+                      className={`min-w-[2rem] rounded-md px-2 py-1 text-sm ${
+                        currentPage === page
+                          ? 'bg-blue-500 text-white'
+                          : 'border border-zinc-300 hover:bg-zinc-100 dark:border-zinc-700 dark:hover:bg-zinc-800'
+                      }`}
+                    >
+                      {page}
+                    </button>
+                  </Fragment>
+                ))}
+            </div>
+            <button
+              onClick={() => setCurrentPage(currentPage + 1)}
+              disabled={currentPage === totalPages}
+              className="rounded-md border border-zinc-300 px-3 py-1 text-sm disabled:opacity-50 dark:border-zinc-700"
+            >
+              Next
+            </button>
+            <button
+              onClick={() => setCurrentPage(totalPages)}
+              disabled={currentPage === totalPages}
+              className="rounded-md border border-zinc-300 px-2 py-1 text-sm disabled:opacity-50 dark:border-zinc-700"
+            >
+              Last
+            </button>
+          </div>
         </div>
       )}
     </div>
